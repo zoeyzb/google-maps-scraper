@@ -1,5 +1,5 @@
 [deploy]
-startCommand = "/usr/bin/google-maps-scraper -web -addr :$PORT -data-folder /tmp/gmapsdata"
+startCommand = "/usr/bin/google-maps-scraper -web -addr :8080 -data-folder /tmp/gmapsdata -c 3"
 healthcheckPath = "/api/v1/jobs"
-healthcheckTimeout = 300
+healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
