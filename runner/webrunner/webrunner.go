@@ -239,7 +239,29 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 
 		go exitMonitor.Run(mateCtx)
 
-		err = mate.Start(mateCtx, seedJobs...)
+		done := make(chan error, 1)
+		go func() {
+			done <- mate.Start(mateCtx, seedJobs...)
+		}()
+
+		select {
+		case err = <-done:
+			// normal completion
+		case <-mateCtx.Done():
+			log.Printf("job %s hit hard timeout after %d seconds; closing scraper", job.ID, allowedSeconds)
+			_ = mate.Close()
+
+			select {
+			case err = <-done:
+				// scraper honored Close after timeout
+			case <-time.After(15 * time.Second):
+				job.Status = web.StatusFailed
+				_ = w.svc.Update(context.WithoutCancel(ctx), job)
+				log.Printf("job %s failed to stop after timeout; exiting process for clean restart", job.ID)
+				os.Exit(1)
+			}
+		}
+
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			cancel()
 
