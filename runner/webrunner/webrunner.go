@@ -248,17 +248,37 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 		case err = <-done:
 			// normal completion
 		case <-mateCtx.Done():
-			log.Printf("job %s hit hard timeout after %d seconds; closing scraper", job.ID, allowedSeconds)
-			_ = mate.Close()
-
-			select {
-			case err = <-done:
-				// scraper honored Close after timeout
-			case <-time.After(15 * time.Second):
-				job.Status = web.StatusFailed
-				_ = w.svc.Update(context.WithoutCancel(ctx), job)
-				log.Printf("job %s failed to stop after timeout; exiting process for clean restart", job.ID)
-				os.Exit(1)
+			ctxErr := mateCtx.Err()
+			if errors.Is(ctxErr, context.Canceled) {
+				// The exit monitor cancels the context when scraping has naturally
+				// reached its stopping condition. Give the scraper time to unwind
+				// before treating it as stuck.
+				select {
+				case err = <-done:
+					// graceful completion after normal cancellation
+				case <-time.After(30 * time.Second):
+					log.Printf("job %s did not stop within cancellation grace; closing scraper", job.ID)
+					_ = mate.Close()
+					select {
+					case err = <-done:
+					case <-time.After(15 * time.Second):
+						job.Status = web.StatusFailed
+						_ = w.svc.Update(context.WithoutCancel(ctx), job)
+						log.Printf("job %s failed to stop after cancellation; exiting process for clean restart", job.ID)
+						os.Exit(1)
+					}
+				}
+			} else {
+				log.Printf("job %s hit hard timeout after %d seconds; closing scraper", job.ID, allowedSeconds)
+				_ = mate.Close()
+				select {
+				case err = <-done:
+				case <-time.After(15 * time.Second):
+					job.Status = web.StatusFailed
+					_ = w.svc.Update(context.WithoutCancel(ctx), job)
+					log.Printf("job %s failed to stop after timeout; exiting process for clean restart", job.ID)
+					os.Exit(1)
+				}
 			}
 		}
 
