@@ -67,6 +67,11 @@ COPY --from=playwright-deps /opt/ms-playwright-go /opt/ms-playwright-go
 RUN chmod -R 755 /opt/browsers \
     && chmod -R 755 /opt/ms-playwright-go
 
-COPY --from=builder /usr/bin/google-maps-scraper /usr/bin/
+# Keep both historical Railway start-command paths valid. Some lanes start
+# /usr/bin/google-maps-scraper while others start /app/google-maps-scraper.
+# Shipping the same binary at both paths is backward-compatible and avoids
+# changing Railway service config or applying any staged project patch.
+COPY --from=builder /usr/bin/google-maps-scraper /usr/bin/google-maps-scraper
+RUN mkdir -p /app && ln -s /usr/bin/google-maps-scraper /app/google-maps-scraper
 
 ENTRYPOINT ["google-maps-scraper"]
