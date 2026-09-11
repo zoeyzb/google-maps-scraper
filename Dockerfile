@@ -28,7 +28,8 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
+RUN sed -i '/if errors.Is(ctxErr, context.Canceled)/,/} else {/ { s/time.After(30 \* time.Second)/time.After(90 * time.Second)/; s/time.After(15 \* time.Second)/time.After(30 * time.Second)/; }' runner/webrunner/webrunner.go \
+    && CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
 
 # Final stage
 FROM debian:trixie-slim
