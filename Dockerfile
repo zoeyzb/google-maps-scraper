@@ -36,9 +36,13 @@ FROM debian:trixie-slim
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
 ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
 
-# Install only the necessary dependencies in a single layer
+# Install Chromium runtime dependencies in the final image. The Playwright
+# install step above runs in a different build stage, so its apt packages are
+# not inherited here. libglib2.0-0 is required by chrome-headless-shell and
+# without it every Maps job exits 127 before loading a page.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libglib2.0-0 \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
