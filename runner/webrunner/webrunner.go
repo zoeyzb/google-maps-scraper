@@ -36,6 +36,52 @@ type mateRunner interface {
 	Close() error
 }
 
+var errMateDidNotStop = errors.New("scraper did not stop after close")
+
+// waitForMateStop gives a scraper a bounded grace period to finish after its
+// context is cancelled. If it is still running, Close is called and we wait a
+// second bounded period. A scraper that remains stuck is isolated to the job:
+// callers can mark that job failed while keeping the web server alive.
+func waitForMateStop(done <-chan error, mate mateRunner, cancelGrace, closeGrace time.Duration) error {
+	if cancelGrace > 0 {
+		timer := time.NewTimer(cancelGrace)
+		defer timer.Stop()
+
+		select {
+		case err := <-done:
+			return err
+		case <-timer.C:
+		}
+	} else {
+		select {
+		case err := <-done:
+			return err
+		default:
+		}
+	}
+
+	_ = mate.Close()
+
+	if closeGrace <= 0 {
+		select {
+		case err := <-done:
+			return err
+		default:
+			return errMateDidNotStop
+		}
+	}
+
+	timer := time.NewTimer(closeGrace)
+	defer timer.Stop()
+
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return errMateDidNotStop
+	}
+}
+
 func New(cfg *runner.Config) (runner.Runner, error) {
 	if cfg.DataFolder == "" {
 		return nil, fmt.Errorf("data folder is required")
@@ -251,34 +297,25 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 			ctxErr := mateCtx.Err()
 			if errors.Is(ctxErr, context.Canceled) {
 				// The exit monitor cancels the context when scraping has naturally
-				// reached its stopping condition. Give the scraper time to unwind
-				// before treating it as stuck.
-				select {
-				case err = <-done:
-					// graceful completion after normal cancellation
-				case <-time.After(30 * time.Second):
-					log.Printf("job %s did not stop within cancellation grace; closing scraper", job.ID)
-					_ = mate.Close()
-					select {
-					case err = <-done:
-					case <-time.After(15 * time.Second):
-						job.Status = web.StatusFailed
-						_ = w.svc.Update(context.WithoutCancel(ctx), job)
-						log.Printf("job %s failed to stop after cancellation; exiting process for clean restart", job.ID)
-						os.Exit(1)
-					}
-				}
+				// reached its stopping condition. Give the scraper time to unwind,
+				// then close only this scraper if it remains stuck. Never terminate
+				// the whole web process: that used to cause Railway 502s for every
+				// other worker using the same Maps lane.
+				log.Printf("job %s cancelled; waiting for scraper shutdown", job.ID)
+				err = waitForMateStop(done, mate, 30*time.Second, 15*time.Second)
 			} else {
 				log.Printf("job %s hit hard timeout after %d seconds; closing scraper", job.ID, allowedSeconds)
-				_ = mate.Close()
-				select {
-				case err = <-done:
-				case <-time.After(15 * time.Second):
-					job.Status = web.StatusFailed
-					_ = w.svc.Update(context.WithoutCancel(ctx), job)
-					log.Printf("job %s failed to stop after timeout; exiting process for clean restart", job.ID)
-					os.Exit(1)
+				err = waitForMateStop(done, mate, 0, 15*time.Second)
+			}
+
+			if errors.Is(err, errMateDidNotStop) {
+				job.Status = web.StatusFailed
+				if updateErr := w.svc.Update(context.WithoutCancel(ctx), job); updateErr != nil {
+					log.Printf("failed to update stuck job status: %v", updateErr)
 				}
+				log.Printf("job %s failed to stop; marking job failed and keeping web service alive", job.ID)
+
+				return fmt.Errorf("job %s: %w", job.ID, errMateDidNotStop)
 			}
 		}
 
