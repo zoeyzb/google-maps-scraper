@@ -3,6 +3,7 @@ package webrunner
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -59,6 +60,31 @@ func TestScrapeJobMarksOKBeforeClosingMate(t *testing.T) {
 
 	if err := w.scrapeJob(context.Background(), &job); err != nil {
 		t.Fatalf("scrape job: %v", err)
+	}
+}
+
+func TestWaitForMateStopReturnsErrorInsteadOfExitingProcess(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan error)
+	mate := fakeMate{}
+
+	err := waitForMateStop(done, mate, time.Millisecond, time.Millisecond)
+	if !errors.Is(err, errMateDidNotStop) {
+		t.Fatalf("waitForMateStop() error = %v, want %v", err, errMateDidNotStop)
+	}
+}
+
+func TestWaitForMateStopReturnsMateResult(t *testing.T) {
+	t.Parallel()
+
+	want := errors.New("mate stopped")
+	done := make(chan error, 1)
+	done <- want
+
+	err := waitForMateStop(done, fakeMate{}, time.Second, time.Second)
+	if !errors.Is(err, want) {
+		t.Fatalf("waitForMateStop() error = %v, want %v", err, want)
 	}
 }
 
