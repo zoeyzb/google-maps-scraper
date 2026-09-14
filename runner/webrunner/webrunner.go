@@ -40,8 +40,9 @@ var errMateDidNotStop = errors.New("scraper did not stop after close")
 
 // waitForMateStop gives a scraper a bounded grace period to finish after its
 // context is cancelled. If it is still running, Close is called and we wait a
-// second bounded period. A scraper that remains stuck is isolated to the job:
-// callers can mark that job failed while keeping the web server alive.
+// second bounded period. If it still cannot stop, the worker loop returns the
+// sentinel so Railway can recycle only this Maps lane and reclaim leaked
+// browser processes while callers retry through the brief lane restart.
 func waitForMateStop(done <-chan error, mate mateRunner, cancelGrace, closeGrace time.Duration) error {
 	if cancelGrace > 0 {
 		timer := time.NewTimer(cancelGrace)
@@ -167,6 +168,11 @@ func (w *webrunner) work(ctx context.Context) error {
 						_ = runner.Telemetry().Send(ctx, evt)
 
 						log.Printf("error scraping job %s: %v", jobs[i].ID, err)
+
+						if errors.Is(err, errMateDidNotStop) {
+							log.Printf("stuck browser cleanup failed for job %s; recycling Maps lane", jobs[i].ID)
+							return err
+						}
 					} else {
 						params := map[string]any{
 							"job_count": len(jobs[i].Data.Keywords),
@@ -296,11 +302,6 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 		case <-mateCtx.Done():
 			ctxErr := mateCtx.Err()
 			if errors.Is(ctxErr, context.Canceled) {
-				// The exit monitor cancels the context when scraping has naturally
-				// reached its stopping condition. Give the scraper time to unwind,
-				// then close only this scraper if it remains stuck. Never terminate
-				// the whole web process: that used to cause Railway 502s for every
-				// other worker using the same Maps lane.
 				log.Printf("job %s cancelled; waiting for scraper shutdown", job.ID)
 				err = waitForMateStop(done, mate, 30*time.Second, 15*time.Second)
 			} else {
@@ -313,7 +314,7 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 				if updateErr := w.svc.Update(context.WithoutCancel(ctx), job); updateErr != nil {
 					log.Printf("failed to update stuck job status: %v", updateErr)
 				}
-				log.Printf("job %s failed to stop; marking job failed and keeping web service alive", job.ID)
+				log.Printf("job %s failed to stop; marking job failed before lane recycle", job.ID)
 
 				return fmt.Errorf("job %s: %w", job.ID, errMateDidNotStop)
 			}
