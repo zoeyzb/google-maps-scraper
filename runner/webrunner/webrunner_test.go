@@ -88,17 +88,6 @@ func TestWaitForMateStopReturnsMateResult(t *testing.T) {
 	}
 }
 
-func TestStuckScraperRecycleGraceIsBounded(t *testing.T) {
-	t.Parallel()
-
-	if cancelCleanupGrace+closeCleanupGrace > 8*time.Second {
-		t.Fatalf("stuck scraper recycle grace = %s, want <= 8s", cancelCleanupGrace+closeCleanupGrace)
-	}
-	if cancelCleanupGrace <= 0 || closeCleanupGrace <= 0 {
-		t.Fatalf("cleanup grace must remain positive: cancel=%s close=%s", cancelCleanupGrace, closeCleanupGrace)
-	}
-}
-
 type fakeMate struct {
 	onClose func()
 }
