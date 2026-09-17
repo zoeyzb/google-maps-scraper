@@ -28,8 +28,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN sed -i 's/waitForMateStop(done, mate, 30\*time.Second, 15\*time.Second)/waitForMateStop(done, mate, 3*time.Second, 4*time.Second)/; s/waitForMateStop(done, mate, 0, 15\*time.Second)/waitForMateStop(done, mate, 0, 4*time.Second)/' runner/webrunner/webrunner.go \
-    && go test ./runner/webrunner \
+RUN go test ./runner/webrunner \
     && CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
 
 # Final stage
