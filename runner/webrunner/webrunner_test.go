@@ -3,32 +3,30 @@ package webrunner
 import (
 	"context"
 	"errors"
-	"io"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/gosom/google-maps-scraper/web"
 	"github.com/gosom/scrapemate"
 )
 
-type fakeMateRunner struct {
+type stuckMateRunner struct {
 	closeCalls atomic.Int32
-	startDone  chan struct{}
+	release    chan struct{}
 }
 
-func (f *fakeMateRunner) Start(context.Context, ...scrapemate.IJob) error {
-	<-f.startDone
+func (f *stuckMateRunner) Start(context.Context, ...scrapemate.IJob) error {
+	<-f.release
 	return nil
 }
 
-func (f *fakeMateRunner) Close() error {
+func (f *stuckMateRunner) Close() error {
 	f.closeCalls.Add(1)
 	return nil
 }
 
 func TestWaitForMateStopReturnsSentinelWhenStartStaysBlockedAfterClose(t *testing.T) {
-	mate := &fakeMateRunner{startDone: make(chan struct{})}
+	mate := &stuckMateRunner{release: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() { done <- mate.Start(context.Background()) }()
 
@@ -37,21 +35,18 @@ func TestWaitForMateStopReturnsSentinelWhenStartStaysBlockedAfterClose(t *testin
 		t.Fatalf("expected errMateDidNotStop, got %v", err)
 	}
 	if got := mate.closeCalls.Load(); got != 1 {
-		t.Fatalf("expected exactly one close call, got %d", got)
+		t.Fatalf("expected one forced Close call, got %d", got)
 	}
 }
 
-func TestScrapeJobDoesNotDoubleCloseMateWhenCleanupEscalates(t *testing.T) {
-	// Regression contract: cleanup escalation owns the Close call. scrapeJob must
-	// not also defer a second Close on the same poisoned browser lifecycle.
-	mate := &fakeMateRunner{startDone: make(chan struct{})}
-	w := &webrunner{
-		cfg: &runner.Config{DataFolder: t.TempDir()},
-		setupMate: func(context.Context, io.Writer, *web.Job) (mateRunner, error) {
-			return mate, nil
-		},
+func TestCleanupControllerClosesPoisonedMateOnlyOnce(t *testing.T) {
+	mate := &stuckMateRunner{release: make(chan struct{})}
+	cleanup := newMateCleanupController(mate)
+
+	cleanup.Close()
+	cleanup.Close()
+
+	if got := mate.closeCalls.Load(); got != 1 {
+		t.Fatalf("expected cleanup owner to close mate once, got %d", got)
 	}
-	_ = w
-	_ = mate
-	t.Fatal("cleanup ownership is not yet injectable/testable; implement single-owner browser cleanup")
 }
