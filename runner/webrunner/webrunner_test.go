@@ -3,6 +3,7 @@ package webrunner
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,19 @@ func (f *stuckMateRunner) Start(context.Context, ...scrapemate.IJob) error {
 func (f *stuckMateRunner) Close() error {
 	f.closeCalls.Add(1)
 	return nil
+}
+
+type mateCleanupController struct {
+	mate mateRunner
+	once sync.Once
+}
+
+func newMateCleanupController(mate mateRunner) *mateCleanupController {
+	return &mateCleanupController{mate: mate}
+}
+
+func (c *mateCleanupController) Close() {
+	c.once.Do(func() { _ = c.mate.Close() })
 }
 
 func TestWaitForMateStopReturnsSentinelWhenStartStaysBlockedAfterClose(t *testing.T) {
