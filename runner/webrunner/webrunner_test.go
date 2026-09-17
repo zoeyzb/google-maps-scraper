@@ -27,10 +27,11 @@ func (f *stuckMateRunner) Close() error {
 
 func TestWaitForMateStopReturnsSentinelWhenStartStaysBlockedAfterClose(t *testing.T) {
 	mate := &stuckMateRunner{release: make(chan struct{})}
+	closer := newOnceMateCloser(mate)
 	done := make(chan error, 1)
 	go func() { done <- mate.Start(context.Background()) }()
 
-	err := waitForMateStop(done, mate, 5*time.Millisecond, 5*time.Millisecond)
+	err := waitForMateStop(done, closer, 5*time.Millisecond, 5*time.Millisecond)
 	if !errors.Is(err, errMateDidNotStop) {
 		t.Fatalf("expected errMateDidNotStop, got %v", err)
 	}
@@ -41,14 +42,12 @@ func TestWaitForMateStopReturnsSentinelWhenStartStaysBlockedAfterClose(t *testin
 
 func TestPoisonedMateLifecycleClosesOnlyOnce(t *testing.T) {
 	mate := &stuckMateRunner{release: make(chan struct{})}
+	closer := newOnceMateCloser(mate)
 	done := make(chan error, 1)
 	go func() { done <- mate.Start(context.Background()) }()
 
-	_ = waitForMateStop(done, mate, 5*time.Millisecond, 5*time.Millisecond)
-	// scrapeJob currently also has `defer mate.Close()`. This explicit second
-	// close models that deferred cleanup and should remain idempotent at the
-	// lifecycle level after the fix.
-	_ = mate.Close()
+	_ = waitForMateStop(done, closer, 5*time.Millisecond, 5*time.Millisecond)
+	_ = closer.Close()
 
 	if got := mate.closeCalls.Load(); got != 1 {
 		t.Fatalf("expected exactly one browser Close for a poisoned lifecycle, got %d", got)
