@@ -3,7 +3,6 @@ package webrunner
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,19 +25,6 @@ func (f *stuckMateRunner) Close() error {
 	return nil
 }
 
-type mateCleanupController struct {
-	mate mateRunner
-	once sync.Once
-}
-
-func newMateCleanupController(mate mateRunner) *mateCleanupController {
-	return &mateCleanupController{mate: mate}
-}
-
-func (c *mateCleanupController) Close() {
-	c.once.Do(func() { _ = c.mate.Close() })
-}
-
 func TestWaitForMateStopReturnsSentinelWhenStartStaysBlockedAfterClose(t *testing.T) {
 	mate := &stuckMateRunner{release: make(chan struct{})}
 	done := make(chan error, 1)
@@ -53,14 +39,18 @@ func TestWaitForMateStopReturnsSentinelWhenStartStaysBlockedAfterClose(t *testin
 	}
 }
 
-func TestCleanupControllerClosesPoisonedMateOnlyOnce(t *testing.T) {
+func TestPoisonedMateLifecycleClosesOnlyOnce(t *testing.T) {
 	mate := &stuckMateRunner{release: make(chan struct{})}
-	cleanup := newMateCleanupController(mate)
+	done := make(chan error, 1)
+	go func() { done <- mate.Start(context.Background()) }()
 
-	cleanup.Close()
-	cleanup.Close()
+	_ = waitForMateStop(done, mate, 5*time.Millisecond, 5*time.Millisecond)
+	// scrapeJob currently also has `defer mate.Close()`. This explicit second
+	// close models that deferred cleanup and should remain idempotent at the
+	// lifecycle level after the fix.
+	_ = mate.Close()
 
 	if got := mate.closeCalls.Load(); got != 1 {
-		t.Fatalf("expected cleanup owner to close mate once, got %d", got)
+		t.Fatalf("expected exactly one browser Close for a poisoned lifecycle, got %d", got)
 	}
 }
