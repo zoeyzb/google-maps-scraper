@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gosom/google-maps-scraper/deduper"
@@ -36,14 +37,33 @@ type mateRunner interface {
 	Close() error
 }
 
+type mateCloser interface {
+	Close() error
+}
+
+type onceMateCloser struct {
+	mate mateCloser
+	once sync.Once
+	err  error
+}
+
+func newOnceMateCloser(mate mateCloser) *onceMateCloser {
+	return &onceMateCloser{mate: mate}
+}
+
+func (c *onceMateCloser) Close() error {
+	c.once.Do(func() { c.err = c.mate.Close() })
+	return c.err
+}
+
 var errMateDidNotStop = errors.New("scraper did not stop after close")
 
 // waitForMateStop gives a scraper a bounded grace period to finish after its
-// context is cancelled. If it is still running, Close is called and we wait a
-// second bounded period. If it still cannot stop, the worker loop returns the
-// sentinel so Railway can recycle only this Maps lane and reclaim leaked
-// browser processes while callers retry through the brief lane restart.
-func waitForMateStop(done <-chan error, mate mateRunner, cancelGrace, closeGrace time.Duration) error {
+// context is cancelled. If it is still running, Close is called through a
+// single-owner closer and we wait a second bounded period. If it still cannot
+// stop, the worker loop returns the sentinel so Railway can recycle only this
+// Maps lane and reclaim leaked browser processes while callers fail over.
+func waitForMateStop(done <-chan error, closer mateCloser, cancelGrace, closeGrace time.Duration) error {
 	if cancelGrace > 0 {
 		timer := time.NewTimer(cancelGrace)
 		defer timer.Stop()
@@ -61,7 +81,7 @@ func waitForMateStop(done <-chan error, mate mateRunner, cancelGrace, closeGrace
 		}
 	}
 
-	_ = mate.Close()
+	_ = closer.Close()
 
 	if closeGrace <= 0 {
 		select {
@@ -231,7 +251,8 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 		return err
 	}
 
-	defer mate.Close()
+	mateCloser := newOnceMateCloser(mate)
+	defer mateCloser.Close()
 
 	var coords string
 	if job.Data.Lat != "" && job.Data.Lon != "" {
@@ -251,7 +272,7 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 		job.Data.Zoom,
 		func() float64 {
 			if job.Data.Radius <= 0 {
-				return 10000 // 10 km
+				return 10000
 			}
 
 			return float64(job.Data.Radius)
@@ -298,15 +319,14 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 
 		select {
 		case err = <-done:
-			// normal completion
 		case <-mateCtx.Done():
 			ctxErr := mateCtx.Err()
 			if errors.Is(ctxErr, context.Canceled) {
 				log.Printf("job %s cancelled; waiting for scraper shutdown", job.ID)
-				err = waitForMateStop(done, mate, 30*time.Second, 15*time.Second)
+				err = waitForMateStop(done, mateCloser, 3*time.Second, 4*time.Second)
 			} else {
 				log.Printf("job %s hit hard timeout after %d seconds; closing scraper", job.ID, allowedSeconds)
-				err = waitForMateStop(done, mate, 0, 15*time.Second)
+				err = waitForMateStop(done, mateCloser, 0, 4*time.Second)
 			}
 
 			if errors.Is(err, errMateDidNotStop) {
