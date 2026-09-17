@@ -28,13 +28,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-
-# Scrapemate v1.3.0 can wedge forever inside Playwright page.Close() after a
-# browser/driver failure. Pin the upstream bounded-close fix so a poisoned page
-# is abandoned after 5 seconds instead of trapping the worker goroutine. The
-# commit is backward-compatible and still targets Go 1.26.x.
-RUN go get github.com/gosom/scrapemate@05e57436073c35b6a19c44badb15587f71b6b700 \
-    && go test ./runner/webrunner \
+RUN go test ./runner/webrunner \
     && CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
 
 # Final stage
