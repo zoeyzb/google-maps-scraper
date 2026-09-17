@@ -378,6 +378,17 @@ func defaultSetupMate(cfg *runner.Config) func(context.Context, io.Writer, *web.
 
 		opts = runner.AppendBrowserCapacityOptions(opts, cfg)
 
+		// Scrapemate's default single-page JS path performs several Playwright
+		// cleanup calls synchronously. A poisoned driver can wedge one of those
+		// calls and prevent mate.Start from returning even after cancellation.
+		// Force the page-slot path for JS jobs: in scrapemate v1.3.0 that path
+		// bounds page.Close() to five seconds, isolating a wedged page instead of
+		// trapping the whole Maps lane. Put this after capacity options so this
+		// safety invariant cannot be accidentally overridden by legacy defaults.
+		if !job.Data.FastMode {
+			opts = append(opts, scrapemateapp.WithMaxPagesPerBrowser(2))
+		}
+
 		hasProxy := false
 
 		if len(cfg.Proxies) > 0 {
