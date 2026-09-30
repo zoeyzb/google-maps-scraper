@@ -1,9 +1,8 @@
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+builder = "RAILPACK"
 
 [deploy]
-startCommand = "/usr/bin/google-maps-scraper -web -addr :8080 -data-folder /tmp/gmapsdata -c 3"
+startCommand = "./out -web -addr :8080 -data-folder /tmp/gmapsdata -c 8"
 healthcheckPath = "/api/v1/jobs"
-healthcheckTimeout = 30
+healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"
